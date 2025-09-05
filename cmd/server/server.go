@@ -1,52 +1,70 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/RoGogDBD/kasp/internal/config"
+	"github.com/RoGogDBD/kasp/internal/handlers"
 	"github.com/RoGogDBD/kasp/internal/logger"
+	"github.com/RoGogDBD/kasp/internal/repository"
+	"github.com/RoGogDBD/kasp/internal/service"
 )
 
 func main() {
-	parseFlags()
-
+	config.ParseFlags()
 	if err := run(); err != nil {
 		logger.Error(fmt.Sprintf("server error: %v", err))
 	}
 }
 
 func run() error {
-	if err := logger.Initialize(flagLogLevel); err != nil {
+	if err := logger.Initialize(config.FlagLogLevel); err != nil {
 		return err
 	}
 
+	logger.Info(fmt.Sprintf(
+		"config: run_addr=%s workers=%d queue_size=%d log_level=%s",
+		config.FlagRunAddr, config.FlagWorkers, config.FlagQueueSize, config.FlagLogLevel,
+	))
+
+	queue := repository.NewQueue(config.FlagQueueSize)
+	storage := repository.NewStorage()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go service.StartWorkers(ctx, config.FlagWorkers, queue, storage)
+
 	mux := http.NewServeMux()
+	mux.Handle("/enqueue", logger.RequestLogger(handlers.EnqueueHandler(queue, storage)))
+	mux.HandleFunc("/healthz", handlers.HealthHandler())
 
-	mux.Handle("/enqueue", logger.RequestLogger(webhook))
-
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	})
-
-	logger.Info(fmt.Sprintf("Running server on address %s", flagRunAddr))
-	return http.ListenAndServe(flagRunAddr, mux)
-}
-
-func webhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		logger.Debug(fmt.Sprintf("got request with bad method=%s", r.Method))
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
+	srv := &http.Server{
+		Addr:    config.FlagRunAddr,
+		Handler: mux,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`
-      {
-        "response": {
-          "text": "Test"
-        }
-      }
-    `))
-	logger.Debug("sending HTTP 200 response")
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error(fmt.Sprintf("listen error: %v", err))
+		}
+	}()
+
+	logger.Info(fmt.Sprintf("Running server on address %s", config.FlagRunAddr))
+
+	<-ctx.Done()
+	logger.Info("Shutting down server...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("Server forced to shutdown: %w", err)
+	}
+
+	return nil
 }

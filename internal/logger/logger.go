@@ -15,7 +15,6 @@ type Level int
 const (
 	DEBUG Level = iota
 	INFO
-	WARN
 	ERROR
 	NONE
 )
@@ -30,13 +29,12 @@ func Initialize(level string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	switch strings.ToLower(level) {
+	levelStr := strings.ToLower(strings.TrimSpace(level))
+	switch levelStr {
 	case "debug":
 		logLevel = DEBUG
 	case "info":
 		logLevel = INFO
-	case "warn":
-		logLevel = WARN
 	case "error":
 		logLevel = ERROR
 	case "none":
@@ -51,7 +49,7 @@ func Debug(msg string) {
 	mu.RLock()
 	defer mu.RUnlock()
 	if logLevel <= DEBUG {
-		logger.Printf("[DEBUG] %s", msg)
+		logger.Printf("\033[32m[DEBUG]\033[0m %s", msg)
 	}
 }
 
@@ -59,15 +57,7 @@ func Info(msg string) {
 	mu.RLock()
 	defer mu.RUnlock()
 	if logLevel <= INFO {
-		logger.Printf("[INFO] %s", msg)
-	}
-}
-
-func Warn(msg string) {
-	mu.RLock()
-	defer mu.RUnlock()
-	if logLevel <= WARN {
-		logger.Printf("[WARN] %s", msg)
+		logger.Printf("\033[34m[INFO]\033[0m %s", msg)
 	}
 }
 
@@ -75,16 +65,16 @@ func Error(msg string) {
 	mu.RLock()
 	defer mu.RUnlock()
 	if logLevel <= ERROR {
-		logger.Printf("[ERROR] %s", msg)
+		logger.Printf("\033[31m[ERROR]\033[0m %s", msg)
 	}
 }
 
 func RequestLogger(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		Debug(fmt.Sprintf("got incoming HTTP request method=%s path=%s", r.Method, r.URL.Path))
+		Debug(fmt.Sprintf("METHOD=%s PATH=%s", r.Method, r.URL.Path))
 		h(w, r)
 		duration := time.Since(start)
-		Info(fmt.Sprintf("handled request method=%s path=%s duration=%v", r.Method, r.URL.Path, duration))
+		Info(fmt.Sprintf("METHOD=%s PATH=%s DURATION=%v", r.Method, r.URL.Path, duration))
 	})
 }
